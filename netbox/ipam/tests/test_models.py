@@ -1705,12 +1705,12 @@ class IPAddressTestCase(TestCase):
         for address in ('10.0.0.0/31', '10.0.0.1/31', '10.0.0.0/32', '2001:db8::/127', '2001:db8::/128'):
             with self.subTest(address=address):
                 ip = IPAddress(address=IPNetwork(address), assigned_object=self.interface)
-                ip.clean()
+                self.assertIsNone(ip.clean())
 
     def test_network_id_without_interface(self):
         # The rule only applies to interface assignment
         ip = IPAddress(address=IPNetwork('10.0.0.0/24'))
-        ip.clean()
+        self.assertIsNone(ip.clean())
 
 
 class VLANGroupTestCase(TestCase):
