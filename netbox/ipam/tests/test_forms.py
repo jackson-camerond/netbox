@@ -283,6 +283,27 @@ class IPAddressFormTestCase(TestCase):
         self.device.refresh_from_db()
         self.assertIsNone(self.device.primary_ip4)
 
+    def test_unchecking_primary_for_parent_clears_primary_ip6(self):
+        form = IPAddressForm(data={
+            'address': '2001:db8::1/64',
+            'status': 'active',
+            'interface': self.interface1.pk,
+            'primary_for_parent': True,
+        })
+        self.assertTrue(form.is_valid(), form.errors)
+        ip = form.save()
+
+        form = IPAddressForm(instance=ip, data={
+            'address': '2001:db8::1/64',
+            'status': 'active',
+            'primary_for_parent': False,
+        })
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+
+        self.device.refresh_from_db()
+        self.assertIsNone(self.device.primary_ip6)
+
     def test_oob_for_parent_sets_and_clears_oob_ip(self):
         form = IPAddressForm(data={
             'address': '10.0.0.1/24',
