@@ -2,18 +2,19 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.template import Context, Template
 from django.test import TestCase
+from netaddr import IPNetwork
 
 from dcim.constants import InterfaceTypeChoices
 from dcim.models import Device, DeviceRole, DeviceType, Interface, Location, Manufacturer, Region, Site, SiteGroup
 from ipam.choices import PrefixStatusChoices
 from ipam.constants import SERVICE_PORT_MAX, VLANGROUP_SCOPE_TYPES
 from ipam.filtersets import ServiceFilterSet, ServiceTemplateFilterSet, VLANFilterSet
-from ipam.forms import PrefixForm, VLANGroupBulkEditForm, VLANGroupForm, VLANIDBulkCreateForm
+from ipam.forms import IPAddressForm, PrefixForm, VLANGroupBulkEditForm, VLANGroupForm, VLANIDBulkCreateForm
 from ipam.forms.bulk_import import IPAddressImportForm, ServiceTemplateImportForm
 from ipam.forms.fields import PortMappingField
 from ipam.forms.filtersets import ServiceFilterForm, ServiceTemplateFilterForm, VLANFilterForm
 from ipam.forms.widgets import PortMappingWidget
-from ipam.models import Prefix, VLANGroup
+from ipam.models import IPAddress, Prefix, VLANGroup
 from utilities.forms.widgets import FilterModifierWidget
 
 
@@ -206,6 +207,139 @@ class IPAddressImportFormTestCase(TestCase):
 
         self.device.refresh_from_db()
         self.assertEqual(self.device.oob_ip, ip1, "OOB IP was incorrectly cleared by a row with is_oob=False")
+
+
+class IPAddressFormTestCase(TestCase):
+    """Tests for setting and clearing a primary or OOB IP from the IP address edit form."""
+
+    @classmethod
+    def setUpTestData(cls):
+        site = Site.objects.create(name='Site 1', slug='site-1')
+        manufacturer = Manufacturer.objects.create(name='Manufacturer 1', slug='manufacturer-1')
+        device_type = DeviceType.objects.create(manufacturer=manufacturer, model='Model 1', slug='model-1')
+        device_role = DeviceRole.objects.create(name='Device Role 1', slug='device-role-1')
+        cls.device = Device.objects.create(
+            name='Device 1',
+            site=site,
+            device_type=device_type,
+            role=device_role,
+        )
+        cls.interface1 = Interface.objects.create(
+            device=cls.device,
+            name='eth0',
+            type=InterfaceTypeChoices.TYPE_1GE_FIXED,
+        )
+        cls.interface2 = Interface.objects.create(
+            device=cls.device,
+            name='eth1',
+            type=InterfaceTypeChoices.TYPE_1GE_FIXED,
+        )
+
+    def test_primary_for_parent_sets_primary_ip4(self):
+        form = IPAddressForm(data={
+            'address': '10.0.0.1/24',
+            'status': 'active',
+            'interface': self.interface1.pk,
+            'primary_for_parent': True,
+        })
+        self.assertTrue(form.is_valid(), form.errors)
+        ip = form.save()
+
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.primary_ip4, ip)
+
+    def test_primary_for_parent_sets_primary_ip6(self):
+        form = IPAddressForm(data={
+            'address': '2001:db8::1/64',
+            'status': 'active',
+            'interface': self.interface1.pk,
+            'primary_for_parent': True,
+        })
+        self.assertTrue(form.is_valid(), form.errors)
+        ip = form.save()
+
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.primary_ip6, ip)
+
+    def test_unchecking_primary_for_parent_clears_primary_ip(self):
+        form = IPAddressForm(data={
+            'address': '10.0.0.1/24',
+            'status': 'active',
+            'interface': self.interface1.pk,
+            'primary_for_parent': True,
+        })
+        self.assertTrue(form.is_valid(), form.errors)
+        ip = form.save()
+
+        # The interface field is disabled once the IP is primary, so the browser doesn't send it
+        form = IPAddressForm(instance=ip, data={
+            'address': '10.0.0.1/24',
+            'status': 'active',
+            'primary_for_parent': False,
+        })
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+
+        self.device.refresh_from_db()
+        self.assertIsNone(self.device.primary_ip4)
+
+    def test_oob_for_parent_sets_and_clears_oob_ip(self):
+        form = IPAddressForm(data={
+            'address': '10.0.0.1/24',
+            'status': 'active',
+            'interface': self.interface1.pk,
+            'oob_for_parent': True,
+        })
+        self.assertTrue(form.is_valid(), form.errors)
+        ip = form.save()
+
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.oob_ip, ip)
+
+        form = IPAddressForm(instance=ip, data={
+            'address': '10.0.0.1/24',
+            'status': 'active',
+            'oob_for_parent': False,
+        })
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+
+        self.device.refresh_from_db()
+        self.assertIsNone(self.device.oob_ip)
+
+    def test_primary_for_parent_requires_interface(self):
+        form = IPAddressForm(data={
+            'address': '10.0.0.1/24',
+            'status': 'active',
+            'primary_for_parent': True,
+        })
+        self.assertFalse(form.is_valid())
+        self.assertIn('primary_for_parent', form.errors)
+        self.assertIn('Only IP addresses assigned to an interface', form.errors['primary_for_parent'][0])
+
+    def test_reassign_with_primary_for_parent(self):
+        ip = IPAddress.objects.create(address=IPNetwork('10.0.0.1/24'), assigned_object=self.interface1)
+
+        form = IPAddressForm(instance=ip, data={
+            'address': '10.0.0.1/24',
+            'status': 'active',
+            'interface': self.interface2.pk,
+            'primary_for_parent': True,
+        })
+        self.assertFalse(form.is_valid())
+        self.assertIn('Cannot reassign primary IP address for the parent device/VM', form.errors['__all__'])
+
+    def test_reassign_with_oob_for_parent(self):
+        ip = IPAddress.objects.create(address=IPNetwork('10.0.0.1/24'), assigned_object=self.interface1)
+
+        form = IPAddressForm(instance=ip, data={
+            'address': '10.0.0.1/24',
+            'status': 'active',
+            'interface': self.interface2.pk,
+            'oob_for_parent': True,
+        })
+        self.assertFalse(form.is_valid())
+        self.assertIn('Cannot reassign out-of-Band IP address for the parent device', form.errors['__all__'])
 
 
 class VLANFormTestCase(TestCase):
