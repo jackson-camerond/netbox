@@ -5,12 +5,13 @@ from django.db.backends.postgresql.psycopg_any import NumericRange
 from django.test import TestCase, override_settings
 from netaddr import IPNetwork, IPSet
 
-from dcim.models import Location, Region, Site, SiteGroup
+from dcim.models import Interface, Location, Region, Site, SiteGroup
 from ipam.choices import *
 from ipam.constants import SERVICE_PORT_MAX, SERVICE_PORT_MIN
 from ipam.models import *
 from ipam.utils import port_mapping_q, rebuild_prefixes
 from utilities.data import string_to_ranges
+from utilities.testing import create_test_device
 from virtualization.models import VirtualMachine
 
 
@@ -1566,6 +1567,11 @@ class PrefixHierarchyTestCase(TestCase):
 
 class IPAddressTestCase(TestCase):
 
+    @classmethod
+    def setUpTestData(cls):
+        device = create_test_device('Device 1')
+        cls.interface = Interface.objects.create(device=device, name='eth0')
+
     def test_family_string(self):
         # Test property when address is a string
         ip = IPAddress(address='10.0.0.1/24')
@@ -1671,6 +1677,40 @@ class IPAddressTestCase(TestCase):
 
         with self.assertRaises(ValidationError):
             ip.full_clean()
+
+    #
+    # Interface assignment validation
+    #
+
+    def test_network_id_on_interface(self):
+        ip = IPAddress(address=IPNetwork('10.0.0.0/24'), assigned_object=self.interface)
+
+        with self.assertRaisesMessage(ValidationError, 'is a network ID'):
+            ip.clean()
+
+    def test_broadcast_on_interface(self):
+        ip = IPAddress(address=IPNetwork('10.0.0.255/24'), assigned_object=self.interface)
+
+        with self.assertRaisesMessage(ValidationError, 'is a broadcast address'):
+            ip.clean()
+
+    def test_ipv6_network_id_on_interface(self):
+        ip = IPAddress(address=IPNetwork('2001:db8::/64'), assigned_object=self.interface)
+
+        with self.assertRaisesMessage(ValidationError, 'is a network ID'):
+            ip.clean()
+
+    def test_point_to_point_and_host_masks_on_interface(self):
+        # /31 and /127 links have no network ID or broadcast address, and /32 and /128 are single hosts
+        for address in ('10.0.0.0/31', '10.0.0.1/31', '10.0.0.0/32', '2001:db8::/127', '2001:db8::/128'):
+            with self.subTest(address=address):
+                ip = IPAddress(address=IPNetwork(address), assigned_object=self.interface)
+                self.assertIsNone(ip.clean())
+
+    def test_network_id_without_interface(self):
+        # The rule only applies to interface assignment
+        ip = IPAddress(address=IPNetwork('10.0.0.0/24'))
+        self.assertIsNone(ip.clean())
 
 
 class VLANGroupTestCase(TestCase):
