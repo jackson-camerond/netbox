@@ -1602,7 +1602,10 @@ class IPAddressTestCase(TestCase):
     def test_duplicate_global_unique(self):
         IPAddress.objects.create(address=IPNetwork('192.0.2.1/24'))
         duplicate_ip = IPAddress(address=IPNetwork('192.0.2.1/24'))
-        self.assertRaises(ValidationError, duplicate_ip.clean)
+        with self.assertRaises(ValidationError) as cm:
+            duplicate_ip.clean()
+        self.assertIn('address', cm.exception.message_dict)
+        self.assertIn('Duplicate IP address found in global table', cm.exception.message_dict['address'][0])
 
     def test_duplicate_vrf(self):
         vrf = VRF.objects.create(name='Test', rd='1:1', enforce_unique=False)
@@ -1614,17 +1617,26 @@ class IPAddressTestCase(TestCase):
         vrf = VRF.objects.create(name='Test', rd='1:1', enforce_unique=True)
         IPAddress.objects.create(vrf=vrf, address=IPNetwork('192.0.2.1/24'))
         duplicate_ip = IPAddress(vrf=vrf, address=IPNetwork('192.0.2.1/24'))
-        self.assertRaises(ValidationError, duplicate_ip.clean)
+        with self.assertRaises(ValidationError) as cm:
+            duplicate_ip.clean()
+        self.assertIn('address', cm.exception.message_dict)
+        self.assertIn('Duplicate IP address found in VRF Test', cm.exception.message_dict['address'][0])
 
     def test_duplicate_nonunique_nonrole_role(self):
         IPAddress.objects.create(address=IPNetwork('192.0.2.1/24'))
         duplicate_ip = IPAddress(address=IPNetwork('192.0.2.1/24'), role=IPAddressRoleChoices.ROLE_VIP)
-        self.assertRaises(ValidationError, duplicate_ip.clean)
+        with self.assertRaises(ValidationError) as cm:
+            duplicate_ip.clean()
+        self.assertIn('address', cm.exception.message_dict)
+        self.assertIn('Duplicate IP address found in global table', cm.exception.message_dict['address'][0])
 
     def test_duplicate_nonunique_role_nonrole(self):
         IPAddress.objects.create(address=IPNetwork('192.0.2.1/24'), role=IPAddressRoleChoices.ROLE_VIP)
         duplicate_ip = IPAddress(address=IPNetwork('192.0.2.1/24'))
-        self.assertRaises(ValidationError, duplicate_ip.clean)
+        with self.assertRaises(ValidationError) as cm:
+            duplicate_ip.clean()
+        self.assertIn('address', cm.exception.message_dict)
+        self.assertIn('Duplicate IP address found in global table', cm.exception.message_dict['address'][0])
 
     def test_duplicate_nonunique_role(self):
         IPAddress.objects.create(address=IPNetwork('192.0.2.1/24'), role=IPAddressRoleChoices.ROLE_VIP)
